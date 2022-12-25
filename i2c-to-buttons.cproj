@@ -120,15 +120,15 @@
     </ToolchainSettings>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="main.c">
+    <Compile Include="src/main.c">
       <SubType>compile</SubType>
       <CustomCompilationSetting Condition="'$(Configuration)' == 'Release'">-O3 -Wall -Wextra</CustomCompilationSetting>
     </Compile>
-    <Compile Include="twislave.c">
+    <Compile Include="src/twislave.c">
       <SubType>compile</SubType>
       <CustomCompilationSetting Condition="'$(Configuration)' == 'Release'">-O3 -Wall -Wextra</CustomCompilationSetting>
     </Compile>
-    <Compile Include="twislave.h">
+    <Compile Include="src/twislave.h">
       <SubType>compile</SubType>
       <CustomCompilationSetting Condition="'$(Configuration)' == 'Release'">-O3 -Wall -Wextra</CustomCompilationSetting>
     </Compile>
