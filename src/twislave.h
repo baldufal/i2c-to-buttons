@@ -38,16 +38,16 @@ void init_twi_slave(uint8_t addr);
 
 // Old versions of AVR-GCC do interrupt stuff differently.
 #if (__GNUC__ * 100 + __GNUC_MINOR__) < 304
-    #error "This library requires AVR-GCC 3.4.5 or later, update to newer AVR-GCC compiler"
+#error "This library requires AVR-GCC 3.4.5 or later, update to newer AVR-GCC compiler"
 #endif
 
 //Schutz vor unsinnigen Buffergroessen
 #if (i2c_buffer_size > 254)
-    #error buffer size needs to be less than 254.
+#error buffer size needs to be less than 254.
 #endif
 
 #if (i2c_buffer_size < 2)
-    #error buffer size needs to be at least two bytes.
+#error buffer size needs to be at least two bytes.
 #endif
 
 #endif /* TWISLAVE_H_ */
