@@ -19,7 +19,7 @@
 // [2]: second data byte
 // [3]: checksum byte
 //
-#define i2c_buffer_size 4
+#define i2c_buffer_size 10
 
 // I2C slave address.
 #define I2C_SLAVE_ADDRESS 0x3e

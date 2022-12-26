@@ -58,100 +58,134 @@ PB6-7: Buttons
 #include <avr/interrupt.h>
 #include <avr/wdt.h>
 #include <util/delay.h>
-#include <string.h> // For memset.
 #include "twislave.h"
-
-// Buffer for 16 values.
-static uint8_t btn_values[2];
 
 // Initializes outputs.
 static void io_init() {
-    // Make all pins inputs except for LED pin PCD.
-    // No pull ups necessary because of external pull ups
-    DDRB = 0x00;
-    DDRC = 0x00;
-    DDRD = 0x01;
+	// Make all pins inputs except for LED pin PC0.
+	// No pull ups necessary because of external pull ups.
+	// We use pull ups anyway to make debugging without external pull ups easier.
+	DDRB = 0x00;
+	PORTB = 0b11000110;
+	DDRC = 0x00;
+	PORTC = 0b00001111;
+	DDRD = 0x01;
+	PORTD = 0b01111110;
+	
+	// Enable LED.
+	PORTD |= (1 << PD0);
 }
 
-// Reads all binary values.
+/*Function to left rotate n by d bits*/
+uint8_t leftRotate(uint8_t n, uint8_t d)
+{
+	/* In n<<d, last d bits are 0. To put first 3 bits of n
+	at last, do bitwise or of n<<d with n >>(INT_BITS -
+	d) */
+	return (n << d) | (n >> (8 - d));
+}
+
+static void readpins(uint8_t* data){
+	// Buttons are on PB0..2, PB6..7.
+	data[0] = PINB & 0b11000111;
+	// Insert PC1..PC3 into btn_values[0] bit positions 3..5.
+	data[0] |= ((PINC & 0b00001110) << 2);
+	
+	// PD0 is LED, insert PC0 instead.
+	data[1] = (PIND & 0xFE) | (PINC & 0x01);
+}
+
+// Reads all binary values 3 times
+// & computes most frequent values
+// & copies values to i2c registers.
+// Interrupts must be disabled.
 static void readout() {
-    btn_values[0] = PINB & 0b11000111; // Buttons are on PB0..2, PB6..7
-    btn_values[1] = PIND & 0xFE; // PD0 is LED
+	uint8_t btn_values[6];
+	uint8_t firstByte;
+	uint8_t secondByte;
+	uint8_t checksum;
+	
+	// Read pins 3 times during 1ms.
+	readpins(btn_values);
+	_delay_us(500);
+	readpins(btn_values+2);
+	_delay_us(500);
+	readpins(btn_values+4);
+	
+	
+	// Compute majority.
+	firstByte = (btn_values[0] & btn_values[2]) |
+	(btn_values[0] & btn_values[4]) |
+	(btn_values[2] & btn_values[4]);
+	secondByte = (btn_values[1] & btn_values[3]) |
+	(btn_values[1] & btn_values[5]) |
+	(btn_values[3] & btn_values[5]);
 
-    // insert PC1..PC3 into btn_values[0] bit positions 3..5
-    uint8_t pin_c_1_to_3 = PINC & 0b00001110;
-    btn_values[0] |= (pin_c_1_to_3 << 2);
-
-    // insert PC0 into btn_values[1] at bit position 0
-    btn_values[1] |= (PINC & 0x01);
+	// Calculate checksum.
+	checksum = leftRotate(firstByte + leftRotate(secondByte, 3), 3);
+	
+	// Write to i2c buffer.
+	i2cdata[1] = firstByte;
+	i2cdata[2] = secondByte;
+	i2cdata[3] = checksum;
+	// Redundancy.
+	i2cdata[4] = leftRotate(firstByte, 3);
+	i2cdata[5] = leftRotate(secondByte, 3);
+	i2cdata[6] = leftRotate(checksum, 3);
+	// Redundancy.
+	i2cdata[7] = leftRotate(firstByte, 6);
+	i2cdata[8] = leftRotate(secondByte, 6);
+	i2cdata[9] = leftRotate(checksum, 6);
 }
 
 int main(void) {
-    // Set inputs/outputs.
-    io_init();
+	// Set inputs/outputs.
+	io_init();
 
-    // Clear button values.
-    memset(btn_values, 0, sizeof(btn_values));
+	// 1 means no WDT reset occurred.
+	i2cdata[0] = I2C_BIT_WDT_RESET;
 
-    // Clear I2C register buffer.
-    // We can't use memset: https://stackoverflow.com/questions/17144570/how-to-set-volatile-array-to-zero-using-memset
-    for (int i = 0; i < i2c_buffer_size; i++) {
-        i2cdata[i] = 0;
-    }
+	// Enable watchdog to restart if we didn't reset it for 2 seconds.
+	wdt_enable(WDTO_2S);
+	// Enable I2C.
+	init_twi_slave(I2C_SLAVE_ADDRESS);
+	// Read first time to have values at first i2c read.
+	readout();
+	// Enable Interrupts.
+	sei();
 
-    // 1 means no WDT reset occurred.
-    i2cdata[0] |= I2C_BIT_WDT_RESET;
+	while (1) {
+		
+		// Reset watchdog timer.
+		wdt_reset();
+		if (MCUCSR & (1 << WDRF)) {
+			// A reset by the watchdog has occurred.
+			// Signal this by clearing bit 2 in status byte.
+			i2cdata[0] &= ~(I2C_BIT_WDT_RESET);
+			// Clear flag for next time.
+			MCUCSR &= ~(1 << WDRF);
+		}
+			
 
-    // Enable watchdog to restart if we didn't reset it for 2 seconds.
-    wdt_enable(WDTO_2S);
-    // Enable I2C.
-    init_twi_slave(I2C_SLAVE_ADDRESS);
-    // Enable Interrupts.
-    sei();
+		// If there is a request to read the buttons...
+		if ((i2cdata[0] & I2C_BIT_READOUT)) {
+			// Disabling interrupts, so i2cdata is kept consistent.
+			cli();
+			{
+				// Disable LED.
+				PORTD &= ~(1 << PD0);
+				
+				
+				// Read and write values to i2c registers.
+				readout();
 
-    uint16_t led_counter = 0;
-
-    while (1) {
-        // Calibrated to 1Hz.
-        _delay_us(940);
-        led_counter++;
-
-        // Every 500ms execute this.
-        if (led_counter > 500) {
-            led_counter = 0;
-
-            // Blink LED.
-            PORTD ^= (1 << PD0);
-
-            // Reset watchdog timer.
-            wdt_reset();
-            if (MCUCSR & (1 << WDRF)) {
-                // A reset by the watchdog has occurred.
-                // Signal this by clearing bit 2 in status byte.
-                i2cdata[0] &= ~(I2C_BIT_WDT_RESET);
-                // Clear flag for next time.
-                MCUCSR &= ~(1 << WDRF);
-            }
-        }
-
-        // If there is a request to read the buttons...
-        if ((i2cdata[0] & I2C_BIT_READOUT)) {
-            // Disabling interrupts, so i2cdata is kept consistent.
-            cli();
-            {
-                readout();
-
-                // Copy results to I2C buffer for readout.
-                i2cdata[1] = btn_values[0];
-                i2cdata[2] = btn_values[1];
-
-                // Calculate checksum.
-                i2cdata[3] = btn_values[0] + btn_values[1];
-
-                // Clear bit one in status byte.
-                i2cdata[0] &= ~I2C_BIT_READOUT;
-            }
-            sei();
-        }
-    }
+				// Clear bit one in status byte.
+				i2cdata[0] &= ~I2C_BIT_READOUT;
+				
+				// Enable LED.
+				PORTD |= (1 << PD0);
+			}
+			sei();
+		}
+	}
 }
